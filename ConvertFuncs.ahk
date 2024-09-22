@@ -126,6 +126,7 @@ setGlobals()
    global gUseLastName           := False       ; Keep track of if we use the last set name in gGuiList
    global gmOnMessageMap         := map()       ; Create a map of OnMessage listeners
    global gmVarSetCapacityMap    := map()       ; A list of VarSetCapacity variables, with definition type
+   global gmByRefParamMap        := map()       ; Map of FuncNames and ByRef params
    global gNL_Func               := ""          ; _Funcs can use this to add New Previous Line
    global gEOLComment_Func       := ""          ; _Funcs can use this to add comments at EOL
    global gfrePostFuncMatch      := False       ; ... to know their regex matched
@@ -419,7 +420,19 @@ _convertLines(ScriptString, finalize:=!gUseMasking)   ; 2024-06-26 RENAMED to ac
          LastLine := Line
          continue
       }
-
+      ; -------------------------------------------------------------------------------
+      ; 2024-09-07 f2g: FIXED - Adjacent, comma-separated empty string assignments - ex1
+      ; re: https://github.com/mmikeww/AHK-v2-script-converter/issues/286
+      else if (RegExMatch(Line, "i)^.*:=\h*`"`"\h*(?<!\))$"))
+      {
+         ; DO NOTHING - already V2 compliant
+      }
+      ; 2024-09-07 f2g: FIXED -  Adjacent, comma-separated empty string assignments - ex2
+      ; re: https://github.com/mmikeww/AHK-v2-script-converter/issues/286
+      else if (RegExMatch(Line, "i)^.*:=.*\)$"))
+      {
+         ; DO NOTHING - already V2 compliant
+      }
       ; -------------------------------------------------------------------------------
       ; Replace = with := expression equivilents in "var = value" assignment lines
       ;
@@ -629,7 +642,20 @@ _convertLines(ScriptString, finalize:=!gUseMasking)   ; 2024-06-26 RENAMED to ac
       ; this regex matches anything inside the parentheses () for both func definitions, and func calls :(
       {
          ; Changing the ByRef parameters to & signs.
-         Line := RegExReplace(Line, "i)(\bByRef\s+)", "&")
+         If RegExMatch(Line, "i)(\bByRef\s+)") {
+            ByRefTrackArray := [] ; for each param of a func, 1 if byef, 0 otherwise
+            params := MatchFunc[2]
+            while pos := RegExMatch(params, "[^,]+", &MatchFuncParams) {
+               if RegExMatch(params, "i)(\bByRef\s+)") {
+                  ByRefTrackArray.Push(true)
+               } else {
+                  ByRefTrackArray.Push(false)
+               }
+               params := StrReplace(params, MatchFuncParams[],,,, 1)
+            }
+            gmByRefParamMap.Set(MatchFunc[1], ByRefTrackArray)
+            Line := RegExReplace(Line, "i)(\bByRef\s+)", "&")
+         }
 
          AllParams := MatchFunc[2]
          ;msgbox, % "function line`n`nLine:`n" Line "`n`nAllParams:`n" AllParams
@@ -1106,6 +1132,7 @@ FinalizeConvert(&code)
    try code := UpdateGoto(code)         ; Update Goto Label when Label is converted to a func
    try code := FixOnMessage(code)       ; Fix turning off OnMessage when defined after turn off
    try code := FixVarSetCapacity(code)  ; &buf -> buf.Ptr   &vssc -> StrPtr(vssc)
+   try code := FixByRefParams(code)     ; Adds & to ByRef params in user func calls
    addMenuCBArgs(&code)                 ; 2024-06-26, AMB - Fix #131
    addOnMessageCBArgs(&code)            ; 2024-06-28, AMB - Fix #136
 
@@ -1570,9 +1597,9 @@ _FileRead(p) {
          OutputDebug("Conversion FileRead has not correct.`n")
       }
       ; To do: add encoding
-      Return format("{1} := Fileread({2}, {3})", p[1], ToExp(Filename), ToExp(Options))
+      Return format("{1} := FileRead({2}, {3})", p[1], ToExp(Filename), ToExp(Options))
    }
-   Return format("{1} := Fileread({2})", p[1], ToExp(p[2]))
+   Return format("{1} := FileRead({2})", p[1], ToExp(p[2]))
 }
 ;################################################################################
 _FileReadLine(p) {
@@ -1702,6 +1729,7 @@ _Gui(p) {
       ControlLabel := ""
       ControlName := ""
       ControlObject := ""
+      GuiOpt := ""
 
       if (p[1] = "New" && gGuiList != "") {
          if (!InStr(gGuiList, gGuiNameDefault)) {
@@ -1731,13 +1759,14 @@ _Gui(p) {
       if (RegExMatch(GuiOldName, "^oGui\d+$")) {
          GuiOldName := StrReplace(GuiOldName, "oGui")
       }
-      Var1 := RegExReplace(p[1], "i)^([^:]*):(.*)$", "$2")
+      Var1 := RegExReplace(p[1], "i)^([^:]*):\s*(.*)$", "$2")
       Var2 := p[2]
       Var3 := p[3]
       Var4 := p[4]
 
       ; 2024-07-09 AMB, UPDATED needles to support all valid v1 label chars
-      if (RegExMatch(Var3, "i)^[^g]*\bg([^,\h``]+).*$")) {
+      ; 2024-09-05 f2g: EDITED - Don't test Var3 for g-label if Var1 = "Show"
+      if (RegExMatch(Var3, "i)^[^g]*\bg([^,\h``]+).*$") && !InStr(Var1, "Show")) {
          ; Record and remove gLabel
          ControlLabel := RegExReplace(Var3, "i)^[^g]*\bg([^,\h``]+).*$", "$1")  ; get glabel name
          gaList_LblsToFuncC.Push(ControlLabel)                                  ; save label name
@@ -1759,8 +1788,7 @@ _Gui(p) {
             }
          }
       }
-      if (RegExMatch(Var3, "i)\b\+?\bhwnd[\w]*\b")) {
-         RegExMatch(Var3, "i)\+?HWND(.*?)(?:\s|$)", &match)
+      if (RegExMatch(Var3, "i)\+?HWND(.*?)(?:\s|$)", &match)) {
          ControlHwnd := match[1]
          Var3 := StrReplace(Var3, match[])
          if (ControlObject = "" && Var4 != "") {
@@ -1771,11 +1799,16 @@ _Gui(p) {
          }
          gmGuiCtrlObj["%" ControlHwnd "%"] := ControlObject
          gmGuiCtrlObj["% " ControlHwnd] := ControlObject
+      } else if (RegExMatch(Var2, "i)\+?HWND(.*?)(?:\s|$)", &match))
+         && (RegExMatch(Var1, "i)(?<!\w)New")) {
+            GuiOpt := Var3
+            GuiOpt := StrReplace(GuiOpt, match[])
+            LineSuffix .= gIndentation match[1] " := " GuiNameLine ".Hwnd"
       }
 
       if (!InStr(gGuiList, "|" GuiNameLine "|")) {
          gGuiList .= GuiNameLine "|"
-         LineResult := GuiNameLine " := Gui()`r`n" gIndentation
+         LineResult := GuiNameLine " := Gui(" GuiOpt ")`r`n" gIndentation
 
          ; Add the events if they are used.
          aEventRename := []
@@ -1854,7 +1887,7 @@ _Gui(p) {
          var1 := "SetFont"
          gGuiActiveFont := ToStringExpr(Var2) ", " ToStringExpr(Var3)
       } else if (var1 = "New") {
-         return Trim(LineResult,"`n")
+         return Trim(LineResult LineSuffix,"`n")
       }
 
       LineResult .= GuiNameLine "."
@@ -4192,6 +4225,43 @@ FixVarSetCapacity(ScriptString) {
          }
       }
       retScript .= Line "`r`n"
+   }
+   return RTrim(retScript, "`r`n") . happyTrails
+}
+;################################################################################
+/**
+ * Finds function calls with ByRef params
+ * and appends an &
+ */
+FixByRefParams(ScriptString) {
+   retScript := ""
+   happyTrails := ''
+   if (RegExMatch(ScriptString, '.*(\R+)$', &m))
+      happyTrails := m[1]
+   loop parse ScriptString, "`n", "`r" {
+      Line := A_LoopField
+      replacement := false
+      for func, v in gmByRefParamMap {
+         if RegExMatch(Line, "(^|.*\W)\Q" func "\E\((.*)\)", &match) ; Nested functions break and cont. sections this
+            && !InStr(Line, "&") { ; Not defining a function
+            retLine := match[1] func "("
+            params := match[2]
+            while pos := RegExMatch(params, "[^,]+", &MatchFuncParams) {
+               if v[A_Index] {
+                  retLine .= "&" LTrim(MatchFuncParams[]) ", "
+               } else {
+                  retLine .= MatchFuncParams[] ", "
+               }
+               params := StrReplace(params, MatchFuncParams[],,,, 1)
+            }
+            retLine := RTrim(retLine, ", ") ")"
+            replacement := true
+         }
+      }
+      if !replacement
+         retScript .= Line "`r`n"
+      else
+         retScript .= retLine "`r`n"
    }
    return RTrim(retScript, "`r`n") . happyTrails
 }
