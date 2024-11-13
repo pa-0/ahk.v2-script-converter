@@ -118,6 +118,8 @@ AddSubFoldersToTree(Folder, DirList, ParentItemID := 0,*)
     Loop Files, Folder "\*.*", "DF"  ; Retrieve all of Folder's sub-folders.
     {
         If InStr( FileExist(A_LoopFileFullPath ), "D" ) {
+            If (!TestFailing and A_LoopFileName = "Failed conversions")
+                continue ; Skip failed conversions when test mode if off
             ItemID := TV.Add(A_LoopFileName, ParentItemID, icons.Folder)
         }
         else If InStr(A_LoopFileFullPath,".ah1") {
@@ -152,13 +154,6 @@ AddSubFoldersToTree(Folder, DirList, ParentItemID := 0,*)
         DirList[ItemID] := A_LoopFilePath
         DirList[A_LoopFilePath] := ItemID
         DirList := AddSubFoldersToTree(A_LoopFilePath, DirList, ItemID)
-    }
-    if TestFailing { ; Clean up issues caused by making tree test root
-        try Switch(TV.GetText(ParentItemID)) {
-            Case "Test_Folder": TV.Modify(ParentItemID, "Expand")
-            Case "TempScript.ah1": TV.Delete(ParentItemID)
-            Case "Yunit": TV.Delete(ParentItemID)
-        }
     }
     TV.Opt("+Redraw")
     SB.SetText("Number of tests: " . Number_Tests . " ( " . Number_Tests - Number_Tests_Pass . " failed / " . Number_Tests_Pass . " passed)", 1)
@@ -631,9 +626,7 @@ GuiTest(strV1Script:="")
 ;    M := Gui("ToolWindow -SysMenu Disabled AlwaysOnTop", "Loading the tree..."), M.Show("w200 h0")
     M := Gui("ToolWindow -SysMenu Disabled", "Loading the tree..."), M.Show("w200 h0")
 
-    if TestFailing and TestMode{
-        DirList := AddSubFoldersToTree(A_ScriptDir "/tests", Map())
-    } else if TestMode{
+    if TestMode{
         DirList := AddSubFoldersToTree(TreeRoot, Map())
     }
     else{
@@ -653,7 +646,17 @@ GuiTest(strV1Script:="")
     CheckBoxViewSymbols := MyGui.Add("CheckBox", "yp x+60", "Symbols")
     CheckBoxViewSymbols.StatusBar := "Display invisible symbols like spaces, tabs and linefeeds"
     CheckBoxViewSymbols.OnEvent("Click", ViewSymbols)
-    V1Edit := MyGui.Add("Edit", "x280 y0 w600 vvCodeV1 +Multi +WantTab +0x100", strV1Script)  ; Add a fairly wide edit control at the top of the window.
+    try {
+        V1Edit := MyGui.Add("Edit", "x280 y0 w600 vvCodeV1 +Multi +WantTab +0x100", strV1Script)  ; Add a fairly wide edit control at the top of the window.
+    } catch Error as e {
+        ; Failed to create control, likely because script is too large
+        msgResult := MsgBox("The v1 script control could not be created`nThis is likely due to the saved script being too large.`nAdding the script after pressing Yes should work`n`nRetry without loading script?", e.Message, 0x34)
+        if (msgResult = "Yes") {
+            V1Edit := MyGui.Add("Edit", "x280 y0 w600 vvCodeV1 +Multi +WantTab +0x100")
+        } else {
+            Reload
+        }
+    }
     V1Edit.OnEvent("Change",Edit_Change)
 
     ButtonRunV1 := MyGui.AddPicButton("w24 h24", "mmcndmgr.dll","icon33 h23")
@@ -785,17 +788,14 @@ GuiTest(strV1Script:="")
     ;iniH := A_ScreenHeight-150, iniW := A_ScreenWidth - 100
     ;MyGui.Show("h" iniH " w" iniW GuiXOpt GuiYOpt GuiMaximise)
     sleep(500)
-    UserClicked := true
 
     if TestMode {
         TestMode := !TestMode
-        UserClicked := false
         MenuTestMode('')
     }
 
     if TestFailing {
         TestFailing := !TestFailing
-        UserClicked := false
         MenuTestFailing('')
     }
 
@@ -882,12 +882,6 @@ MenuTestMode(*)
         CheckBoxV2E.Visible := false
         ViewMenu.UnCheck("View Tree")
     }
-    if TestMode and UserClicked{
-        msgResult := MsgBox("In order for changes to take effect a reload is required.`n`nReload now?", "Reload Required", 68)
-        if (msgResult = "Yes")
-            Gui_Close(MyGui),Reload()
-    }
-    UserClicked := true
     IniWrite(TestMode, "QuickConvertorV2.ini", "Convertor", "TestMode")
     MyGui.GetPos(, , &Width, &Height)
     Gui_Size(MyGui, 0, Width-14, Height - 60)
@@ -897,12 +891,6 @@ MenuTestFailing(*)
     global
     SettingsMenu.ToggleCheck("Include Failing")
     TestFailing := !TestFailing
-    if TestFailing and TestMode and UserClicked{
-        msgResult := MsgBox("In order for changes to take effect a reload is required.`n`nReload now?", "Reload Required", 68)
-        if (msgResult = "Yes")
-            Gui_Close(MyGui),Reload()
-    }
-    UserClicked := true
     IniWrite(TestFailing, "QuickConvertorV2.ini", "Convertor", "TestFailing")
 }
 MenuViewExpected(*)
