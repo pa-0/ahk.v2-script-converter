@@ -21,7 +21,9 @@
 #define NOKANJI
 #define NOMCX
 
-
+#ifdef _MSC_VER
+ #pragma comment(lib, "user32")
+#endif
 #include <windows.h>
 
 typedef uintptr_t uptr_t;   // Define uptr_t, an unsigned integer type large enough to hold a pointer.
@@ -228,7 +230,7 @@ sptr_t Call(unsigned int iMessage, uptr_t wParam, sptr_t lParam) { // direct fun
     // return SendMessage(scintHwnd, iMessage, wParam, lParam);;
 // }
 
-__declspec(dllimport) sptr_t Init(HWND hwnd) {
+__declspec(dllexport) sptr_t Init(HWND hwnd) {
     scintHwnd = hwnd; // global var, used with Call() wrapper func
     
     // It appears to work, but calling pSciMsgStat() always results in error 0x00000005.
@@ -310,7 +312,7 @@ unsigned int DelBrace(struct scint *data) { // BeforeDelete event (mostly), or r
 
 }
 
-__declspec(dllimport) unsigned int DeleteRoutine(struct scint *data) { // for calling DelBrace() from outside the DLL
+__declspec(dllexport) unsigned int DeleteRoutine(struct scint *data) { // for calling DelBrace() from outside the DLL
     return DelBrace(data);
 }
 
@@ -352,7 +354,7 @@ char match_kw(struct wordList *keywords, char *Word, int CaseSense) {
     return 0;
 }
 
-__declspec(dllimport) unsigned int ChunkColoring(struct scint *data, int loading, struct wordList *keywords, int CaseSense) { // it's alive!
+__declspec(dllexport) unsigned int ChunkColoring(struct scint *data, int loading, struct wordList *keywords, int CaseSense) { // it's alive!
     
     unsigned int docLength = Call(0x7D6, 0, 0); // SCI_GETLENGTH // mostly for screen styling
     
@@ -703,29 +705,3 @@ __declspec(dllimport) unsigned int ChunkColoring(struct scint *data, int loading
     
     return 0;
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
