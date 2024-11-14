@@ -1,1 +1,0 @@
-ControlSetText, Edit1, Changed Text, Untitled -

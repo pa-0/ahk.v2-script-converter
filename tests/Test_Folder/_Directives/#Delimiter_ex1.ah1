@@ -1,2 +1,0 @@
-#Delimiter -
-MsgBox- Test

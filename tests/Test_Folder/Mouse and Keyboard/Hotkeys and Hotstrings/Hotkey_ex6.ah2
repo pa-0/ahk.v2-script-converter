@@ -1,1 +1,0 @@
-Hotkey("#c", "On") ; V1toV2: Removed UseErrorLevel

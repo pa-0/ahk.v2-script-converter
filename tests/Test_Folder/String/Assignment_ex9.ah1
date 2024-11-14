@@ -1,2 +1,0 @@
-input := Clipboard
-MsgBox % input
